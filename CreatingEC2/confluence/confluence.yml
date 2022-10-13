@@ -1,0 +1,100 @@
+---
+- hosts: webserver
+  # connection: local
+  gather_facts: False
+  vars_files:
+    - ../group_vars/all.yml
+  tasks:
+  - name: Run the equivalent of "apt-get update" as a separate step
+    become: yes
+    apt:
+     update_cache: yes
+    
+  - name: install ntp
+    become: yes
+    apt: pkg=ntp state=present
+
+  - name: start ntp
+    become: yes
+    service: name=ntp state=started enabled=true
+  
+  - name: Set the timezone to the {{new_host_timezone}} one
+    become: yes
+    timezone: "name={{new_host_timezone}}"
+
+
+     
+  - name: Ensure NFS is installed.
+    become: yes
+    package: 
+    
+      name: "{{ nfs_package }}" 
+      state: present
+
+  - name: Create directories for the mounts
+    become: yes
+    file:
+      path: "{{ item.path | default('/efs-confluence') }}"
+      state: directory
+      mode: 0777
+      owner: "{{ item.owner | default('root') }}"
+      group: "{{ item.group | default('root') }}"
+    # with_items: "{{ aws_efs_paths }}"
+  
+  - name: Ensure EFS volume is mounted.
+    become: yes
+    mount:
+        name: "{{ efs_mount_dir }}"
+        src: "{{ efs_file_system_id }}.efs.{{ region }}.amazonaws.com:/"
+        fstype: nfs4
+        opts: nfsvers=4.1
+        state: mounted
+  - name : install openjdk-8
+    become: yes
+    apt:
+      name: "{{ item }}"
+      state: present
+    with_items:
+     openjdk-8-jdk
+
+  - name: Download and extract confluence
+    become: yes
+    ansible.builtin.unarchive:
+     src: https://www.atlassian.com/software/confluence/downloads/binary/atlassian-confluence-7.19.2.tar.gz
+     dest: /opt/
+     remote_src: yes
+  - name: rename confluence folder
+    become: yes
+    shell: mv /opt/atlassian-confluence-7.19.2 /opt/confluence
+      
+  - name: Create Directory
+    shell: mkdir -p /home/ubuntu/confluence/confluence-home
+
+  - name: Change ownership
+    become: yes
+    file:
+      dest: /opt/confluence
+      owner: ubuntu
+      group: ubuntu
+      recurse: yes
+
+  - name: Update confluence Directory path
+    lineinfile:
+        dest: /opt/confluence/confluence/WEB-INF/classes/confluence-init.properties
+        line: "confluence.home=/home/ubuntu/confluence/confluence-home"
+  - name: Update bamboo Directory path
+    lineinfile:
+        dest: /opt/confluence/confluence/WEB-INF/classes/confluence-init.properties
+        line: "bamboo.shared.home=/efs-confluence"
+  - name: Execute the script
+    become: yes
+    copy:
+      src: ./confluence.service
+      dest: /etc/systemd/system/
+  - name: reload systemctl
+    become: yes
+    command: systemctl daemon-reload
+  - name: Start confluence
+    become: yes
+    service: name=confluence.service state=started enabled=yes
+       
